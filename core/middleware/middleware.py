@@ -28,14 +28,14 @@ class RequestLogSQLMiddleware:
         if request.path.startswith("/admin/") or request.path.startswith("/static/"):
             return response
 
-        # --- User Info ---
+
         user = None
         user_id = None
         if hasattr(request, "user") and request.user.is_authenticated:
             user = f"{request.user.username}"
             user_id = request.user.id
 
-        # --- User Agent Parsing ---
+
         user_agent_str = request.META.get("HTTP_USER_AGENT", "")
         ua = parse(user_agent_str)
         device_info = {
@@ -49,7 +49,7 @@ class RequestLogSQLMiddleware:
             "is_pc": ua.is_pc,
         }
 
-        # --- Safe Body Extraction ---
+
         body_data = None
         if request.method in ["POST", "PUT", "PATCH", "DELETE"]:
             if hasattr(request, "data"):
@@ -60,7 +60,7 @@ class RequestLogSQLMiddleware:
                 except Exception:
                     body_data = str(request._body[:500])
 
-        # --- Error message if status >= 400 ---
+
         error_message = None
         if getattr(response, "status_code", 200) >= 400:
             try:
@@ -69,7 +69,7 @@ class RequestLogSQLMiddleware:
             except Exception:
                 error_message = "Cannot decode response content"
 
-        # --- Save to logs DB ---
+
         RequestLog.objects.using("logs").create(
             method=request.method,
             path=request.path,
@@ -116,10 +116,6 @@ class RequestLogNOSQLMiddleware:
 
     def __call__(self, request):
 
-        # ---------------------------
-        # 1) PRE-PROCESS BODY (IMPORTANT)
-        # ---------------------------
-        print('hamid')
         request_body_data = None
         if request.method in ["POST", "PUT", "PATCH", "DELETE"]:
 
@@ -147,9 +143,6 @@ class RequestLogNOSQLMiddleware:
                 "/media/"):
             return response
 
-        # ---------------------------
-        # 2) USER INFO
-        # ---------------------------
         user_info = None
         user_id = None
 
@@ -159,9 +152,7 @@ class RequestLogNOSQLMiddleware:
             user_info = f"{full_name} / {phone}"
             user_id = str(request.user.id)
 
-        # ---------------------------
-        # 3) USER AGENT
-        # ---------------------------
+
         user_agent_str = request.META.get("HTTP_USER_AGENT", "")
         ua = parse(user_agent_str)
 
@@ -176,9 +167,7 @@ class RequestLogNOSQLMiddleware:
             "is_tablet": ua.is_tablet,
         }
 
-        # ---------------------------
-        # 4) ERROR MESSAGE
-        # ---------------------------
+
         error_message = None
         if getattr(response, "status_code", 200) >= 400:
             try:
@@ -191,9 +180,6 @@ class RequestLogNOSQLMiddleware:
 
                 error_message = "Could not parse error content"
 
-        # ---------------------------
-        # 5) LOG DATA
-        # ---------------------------
         log_data = {
             "method": request.method,
             "path": request.path,
