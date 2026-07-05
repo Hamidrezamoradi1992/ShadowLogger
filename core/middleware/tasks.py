@@ -1,97 +1,91 @@
-# from celery import shared_task
-# from pymongo import MongoClient
-# import os
-# from datetime import datetime
-# import logging
-# from django.conf import settings
-# logger = logging.getLogger(__name__)
-# logging.basicConfig(level=logging.INFO)
-#
-# # MONGO_URI = settings.MONGO_URI
-# MONGO_URI ='mongodb://mongouser:mongopass@mongo:27017/admin?authSource=admin'
-# MONGO_DB_NAME = "sedo_logs"
-# MONGO_COLLECTION_NAME = "request_logs"
-#
-# logger.error(f"hamidsjdhjahsjd;asdaskjdaskdjlaksdaksdas{MONGO_URI}")
-# @shared_task(bind=True)
-# def save_request_log(self, log_data):
-#     print("CELERY TASK EXECUTED!")
-#
-#     logger.info(
-#         f"Task started: Saving log for method: {log_data.get('method')} path: {log_data.get('path')}"
-#     )
-#
-#     try:
-#         client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-#         db = client[MONGO_DB_NAME]
-#         col = db[MONGO_COLLECTION_NAME]
-#
-#     except Exception as e:
-#         logger.error(f"MONGO_CONNECT_FAIL: {e}")
-#         raise self.retry(exc=e, countdown=5)
-#
-#     try:
-#         if isinstance(log_data.get("created_at"), (int, float)):
-#             log_data["created_at"] = datetime.fromtimestamp(log_data["created_at"])
-#         else:
-#             log_data["created_at"] = datetime.now()
-#
-#         result = col.insert_one(log_data)
-#
-#         logger.info(f"MONGO_INSERT_SUCCESS: ID = {result.inserted_id}")
-#
-#     except Exception as e:
-#         logger.error(f"MONGO_INSERT_FAIL: {e}")
-#
-#     finally:
-#         client.close()
-
-
-
-
-from celery import shared_task
-from pymongo import MongoClient
 import os
-from datetime import datetime
+import boto3
 import logging
+import json
+from celery import shared_task
+from datetime import datetime
+from decouple import config
+from core.mongo import db
+
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb://mongo:27017/")
-MONGO_DB_NAME = "sedo_logs"
-MONGO_COLLECTION_NAME = "request_logs"
 
-logger.error(f"MONGO_URI_CHECK: {MONGO_URI}")
-@shared_task(bind=True)
-def save_request_log(self, log_data):
-    print("CELERY TASK EXECUTED!")
-
-    logger.info(
-        f"Task started: Saving log for method: {log_data.get('method')} path: {log_data.get('path')}"
+def get_s3_client():
+    return boto3.client(
+        's3',
+        aws_access_key_id=config('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=config('AWS_SECRET_ACCESS_KEY'),
+        endpoint_url=config('AWS_S3_ENDPOINT_URL'),
     )
 
-    try:
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        db = client[MONGO_DB_NAME]
-        col = db[MONGO_COLLECTION_NAME]
+OBJECT_STORAGE_ACTIVE = config("OBJECT_STORAGE_ACTIVE", default=False, cast=bool)
+MONGO_ACTIVATE = config("MONGO_ACTIVATE", default=False, cast=bool)
+AWS_STORAGE_BUCKET_NAME = config("AWS_STORAGE_BUCKET_NAME", default=None, cast=str)
 
-    except Exception as e:
-        logger.error(f"MONGO_CONNECT_FAIL: {e}")
-        raise self.retry(exc=e, countdown=5)
 
-    try:
-        if isinstance(log_data.get("created_at"), (int, float)):
-            log_data["created_at"] = datetime.fromtimestamp(log_data["created_at"])
-        else:
-            log_data["created_at"] = datetime.now()
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
+def save_request_log(self, log_data):
 
-        result = col.insert_one(log_data)
 
-        logger.info(f"MONGO_INSERT_SUCCESS: ID = {result.inserted_id}")
+    log_data["created_at"] = (
+        datetime.fromtimestamp(log_data["created_at"])
+        if isinstance(log_data.get("created_at"), (int, float))
+        else datetime.now()
+    )
 
-    except Exception as e:
-        logger.error(f"MONGO_INSERT_FAIL: {e}")
+    log_json = json.dumps(log_data, default=str, ensure_ascii=False)
 
-    finally:
-        client.close()
+    if MONGO_ACTIVATE:
+        try:
+            col = db["request_logs"]
+            result = col.insert_one(log_data)
+            logger.info(f"Inserted log with ID {result.inserted_id} into MongoDB")
+            return str(result.inserted_id)
+
+        except Exception as mongo_error:
+            logger.error(f"MongoDB failed: {mongo_error}")
+
+
+    if OBJECT_STORAGE_ACTIVE:
+        try:
+            s3 = get_s3_client()
+            request_path = log_data.get("path", "unknown").strip("/").replace("/", "-")
+
+
+            timestamp = datetime.now().strftime("%H-%M-%S-%f")
+            file_name = f"logs/{datetime.now().strftime('%Y-%m-%d')}/{request_path}_{timestamp}.json"
+
+
+            s3.put_object(
+                Bucket=AWS_STORAGE_BUCKET_NAME,
+                Key=file_name,
+                Body=log_json + "\n",
+            )
+
+            logger.info(f"Log saved to Object Storage: {file_name}")
+            return file_name
+
+        except Exception as s3_error:
+            logger.error(f"Object Storage failed: {s3_error}")
+
+    else:
+        try:
+            date_folder = datetime.now().strftime('%Y-%m-%d')
+            directory = f"static/logs"
+            os.makedirs(directory, exist_ok=True,mode=777)
+
+
+            file_path = os.path.join(directory, f"{date_folder}.json")
+
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write(log_json + "\n")
+
+            logger.info(f"Log saved locally: {file_path}")
+            return file_path
+
+        except Exception as file_error:
+             logger.error(f"Local file save failed: {file_error}")
+
+
+    raise Exception("All logging backends failed.")

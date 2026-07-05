@@ -54,7 +54,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
 
     'middleware.middleware.RequestLogNOSQLMiddleware',
-    'middleware.middleware.RequestLogSQLMiddleware',
+    # 'middleware.middleware.RequestLogSQLMiddleware',
 
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
