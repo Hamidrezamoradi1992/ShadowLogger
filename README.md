@@ -1,166 +1,182 @@
-# ShadowLogger 🕵️‍♂️
+# سیستم لاگ‌گیری درخواست‌ها (Request Logging Middleware)
 
-![Python Version](https://img.shields.io/badge/Python-3.11+-blue.svg)
-![Django Version](https://img.shields.io/badge/Django-5.2+-green.svg)
-![License](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Celery](https://img.shields.io/badge/Celery-Async%20Logging-orange)
-![MongoDB](https://img.shields.io/badge/MongoDB-NoSQL%20Logs-47A248)
-
-**سیستم ثبت لاگ پیشرفته و نامرئی برای جنگو**  
-ShadowLogger تمام درخواست‌های ورودی به برنامه Django شما را بدون نیاز به تغییر در کد اصلی برنامه، به صورت کامل و با جزئیات ثبت می‌کند — هم در دیتابیس رابطه‌ای (SQL) و هم به صورت غیرهمزمان در MongoDB (از طریق Celery).
-
-هدف: ردیابی ۱۰۰٪ ترافیک وب بدون تاثیر بر عملکرد و بدون دست‌کاری منطق برنامه.
+این ماژول یک میان‌افزار (Middleware) برای پروژه‌ی Django است که تمام درخواست‌های HTTP ورودی به سرور را به‌صورت خودکار ثبت (log) می‌کند. ثبت لاگ‌ها به‌صورت **غیرهمزمان (async)** و از طریق **Celery** انجام می‌شود تا هیچ تأثیری روی سرعت پاسخ‌دهی API نداشته باشد.
 
 ---
 
-## 🚀 ویژگی‌های کلیدی
+## ویژگی‌ها
 
-| ویژگی                       | توضیحات                                                                 |
-|----------------------------|-------------------------------------------------------------------------|
-| **دوگانه ثبت لاگ**          | همزمان در SQL (ORM) و MongoDB (آسنکرون با Celery)                         |
-| **بدون تغییر در کد برنامه**  | فقط با افزودن دو میدل‌ور به `settings.py` فعال می‌شود                     |
-| **جزئیات کامل درخواست**   | متد، مسیر، کاربر، IP، Query Params، Body، زمان پاسخ، خطاها، User-Agent، دستگاه |
-| **دیتابیس جداگانه برای لاگ** | تمام لاگ‌های SQL در دیتابیس `logs` ذخیره می‌شوند (با `LogsRouter`)       |
-| **پنل ادمین کامل**          | جستجو، فیلتر، فقط‌خواندنی در Django Admin                               |
-| **لاگ آسنکرون در MongoDB**  | با Celery + Retry خودکار در صورت قطعی MongoDB                           |
-| **حذف خودکار مسیرهای غیرضروری**| به‌صورت پیش‌فرض `/admin`, `/static`, `/media` و health-check مستثنی هستند |
-| **پشتیبانی کامل از Docker** | Docker Compose با PostgreSQL + Redis + MongoDB + Celery                   |
+- ثبت خودکار تمام درخواست‌های `POST`, `PUT`, `PATCH`, `DELETE` همراه با بدنه‌ی درخواست (Body)
+- پشتیبانی از فرمت‌های مختلف بدنه: JSON، فرم معمولی (`form-data`) و آپلود فایل (`multipart/form-data`)
+- استخراج اطلاعات کاربر لاگین‌شده (نام کاربری، شماره تلفن، شناسه کاربر)
+- تشخیص اطلاعات دستگاه و مرورگر کاربر (User-Agent Parsing) شامل نوع مرورگر، سیستم‌عامل و نوع دستگاه (موبایل/دسکتاپ/تبلت)
+- ثبت آی‌پی واقعی کاربر (با در نظر گرفتن هدر `X-Forwarded-For` پشت پراکسی/لودبالانسر)
+- ثبت وضعیت پاسخ (status code)، زمان پردازش درخواست (بر حسب میلی‌ثانیه) و پیام خطا در صورت بروز خطا (کد وضعیت ≥ 400)
+- امکان ذخیره‌ی لاگ‌ها در سه بستر مختلف با اولویت مشخص:
+  1. **MongoDB**
+  2. **Object Storage (سازگار با S3)**
+  3. **فایل محلی JSON** (fallback نهایی)
+- استثنا کردن مسیرهای `/admin/`, `/static/`, `/media/` از فرآیند لاگ‌گیری
+- تلاش مجدد خودکار (Retry) در صورت شکست عملیات ذخیره‌سازی، با استفاده از قابلیت `autoretry_for` سلری
 
 ---
 
-## 📁 ساختار پروژه
+## ساختار پروژه
+
+```
 core/
-├── middleware/
-│   ├── init.py
-│   ├── middleware.py      # دو میدل‌ور SQL و NoSQL
-│   ├── tasks.py           # تسک Celery برای نوشتن در MongoDB
-│   ├── models.py          # مدل RequestLog
-│   └── admin.py           # تنظیمات Django Admin
-├── core/
-│   ├── db_router.py       # LogsRouter برای دیتابیس logs
-│   ├── settings.py
-│   └── celery.py
-envs/
-└── .env.dev               # متغیرهای محیطی نمونه
-text---
+├── settings.py        # تنظیمات اصلی Django، دیتابیس، سلری و کش
+├── db_router.py        # روتر دیتابیس برای هدایت مدل‌های لاگ به SQLite جداگانه
+└── mongo.py            # اتصال به MongoDB با استفاده از pymongo
 
-## 🛠 نحوه استفاده در پروژه‌های دیگر (Plug & Play)
+middleware/
+├── middleware.py        # کلاس اصلی RequestLogMiddleware
+└── tasks.py             # تسک سلری save_request_log برای ذخیره‌ی لاگ
+```
 
-1. پوشه `core/middleware` را کپی کنید داخل پروژه‌تان
-2. اپ `middleware` را به `INSTALLED_APPS` اضافه کنید
-3. میدل‌ورها را به `MIDDLEWARE` اضافه کنید **(ترتیب مهم است!)**:
+---
 
-```python
-MIDDLEWARE = [
-    # ... سایر میدل‌ورهای جنگو
-    'middleware.middleware.RequestLogNOSQLMiddleware',  # اول (برای اندازه‌گیری زمان پاسخ)
-    'middleware.middleware.RequestLogSQLMiddleware',     # دوم (برای ذخیره در SQL)
-    # ...
-]
+## نحوه‌ی عملکرد
 
-دیتابیس لاگ و روتر را اضافه کنید:
+### ۱. جمع‌آوری اطلاعات درخواست (`middleware.py`)
 
-PythonDATABASES = {
-    "default": { ... },
-    "logs": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db_logs.sqlite3",
-        # یا PostgreSQL/MySQL دلخواه
-    },
+به ازای هر درخواست:
+
+1. اگر متد درخواست یکی از `POST/PUT/PATCH/DELETE` باشد، بدنه‌ی درخواست بر اساس نوع `Content-Type` استخراج می‌شود:
+   - **multipart/form-data**: اطلاعات فرم و متادیتای فایل‌های آپلودی (نام، حجم، نوع فایل) بدون خواندن محتوای فایل استخراج می‌شود.
+   - **form-data معمولی**: از `request.POST` خوانده می‌شود.
+   - **JSON خام**: با `json.loads` پردازش می‌شود؛ در صورت شکست، به‌عنوان «داده خام یا فایل» علامت‌گذاری می‌شود.
+2. زمان شروع و پایان پردازش درخواست اندازه‌گیری می‌شود تا `response_time_ms` محاسبه شود.
+3. مسیرهای مربوط به ادمین، فایل‌های استاتیک و مدیا از لاگ‌گیری معاف می‌شوند.
+4. اطلاعات کاربر (در صورت لاگین بودن)، آی‌پی، User-Agent و جزئیات دستگاه جمع‌آوری می‌شود.
+5. در صورت خطا در پاسخ (کد وضعیت ≥ 400)، پیام خطا نیز استخراج و ذخیره می‌شود.
+6. در نهایت، دیکشنری کامل لاگ (`log_data`) پس از عبور از تابع `serialize_for_celery` (برای تبدیل انواع داده‌ی غیرقابل‌سریالایز مانند `ObjectId` و `datetime`) به تسک سلری `save_request_log` ارسال می‌شود.
+
+> توجه: در صورت بروز هرگونه خطا در ارسال به سلری، خطا صرفاً چاپ می‌شود و مانع از برگرداندن پاسخ اصلی به کاربر نمی‌شود.
+
+### ۲. ذخیره‌سازی لاگ (`tasks.py`)
+
+تسک `save_request_log` به‌صورت زیر عمل می‌کند و بر اساس تنظیمات، یکی از مسیرهای زیر را طی می‌کند:
+
+| اولویت | شرط فعال‌سازی | مقصد ذخیره |
+|---|---|---|
+| ۱ | `MONGO_ACTIVATE=True` | Collection با نام `request_logs` در MongoDB |
+| ۲ | `OBJECT_STORAGE_ACTIVE=True` | باکت S3 با مسیر `logs/YYYY-MM-DD/<path>_<timestamp>.json` |
+| ۳ (پیش‌فرض) | در غیر این صورت | فایل محلی در مسیر `static/logs/YYYY-MM-DD.json` |
+
+اگر تمام روش‌های ذخیره‌سازی با شکست مواجه شوند، یک `Exception` صریح («All logging backends failed.») صادر می‌شود که باعث فعال شدن مکانیزم Retry سلری (حداکثر ۳ بار، با backoff نمایی) می‌گردد.
+
+---
+
+## پیش‌نیازها و متغیرهای محیطی (Environment Variables)
+
+### دیتابیس اصلی (PostgreSQL/PostGIS)
+
+| متغیر | پیش‌فرض | توضیح |
+|---|---|---|
+| `PGDB_ENGINE` | `django.contrib.gis.db.backends.postgis` | درایور دیتابیس |
+| `PGDB_NAME` | `postgres` | نام دیتابیس |
+| `PGDB_USER` | `postgres` | نام کاربری |
+| `PGDB_PASS` | `postgres` | رمز عبور |
+| `PGDB_HOST` | `0.0.0.0` | آدرس هاست |
+| `PGDB_PORT` | `5432` | پورت |
+
+### MongoDB
+
+| متغیر | پیش‌فرض | توضیح |
+|---|---|---|
+| `MONGO_ACTIVATE` | `False` | فعال/غیرفعال کردن ذخیره در Mongo |
+| `MONGO_USER` | `mongouser` | نام کاربری |
+| `MONGO_PASS` | `mongopass` | رمز عبور |
+| `MONGO_HOST` | `mongo` | آدرس هاست |
+| `MONGO_PORT` | `27017` | پورت |
+| `MONGO_DB_NAME` | `sedo_logs` | نام دیتابیس |
+| `MONGO_AUTH_SOURCE` | `admin` | دیتابیس احراز هویت |
+
+### Object Storage (S3-Compatible)
+
+| متغیر | پیش‌فرض | توضیح |
+|---|---|---|
+| `OBJECT_STORAGE_ACTIVE` | `False` | فعال/غیرفعال کردن ذخیره در Object Storage |
+| `AWS_ACCESS_KEY_ID` | — | کلید دسترسی |
+| `AWS_SECRET_ACCESS_KEY` | — | کلید مخفی |
+| `AWS_S3_ENDPOINT_URL` | — | آدرس Endpoint سرویس S3 |
+| `AWS_STORAGE_BUCKET_NAME` | — | نام باکت |
+
+### سلری و کش (Redis)
+
+| متغیر | پیش‌فرض | توضیح |
+|---|---|---|
+| `CELERY_REDIS` | `False` | فعال‌سازی بروکر Redis برای سلری |
+| `CELERY_BROKER_URL` | `redis://redis:6379/1` | آدرس بروکر سلری |
+| `REDIS_CACHE_URL` | `redis://redis:6379/0` | آدرس کش Redis |
+
+### عمومی
+
+| متغیر | پیش‌فرض | توضیح |
+|---|---|---|
+| `SECRET_KEY` | `test` | کلید امنیتی Django |
+| `DEBUG` | `True` | حالت دیباگ |
+| `ALLOWED_HOSTS` | `*` | هاست‌های مجاز (جدا شده با کاما) |
+
+---
+
+## نصب و راه‌اندازی
+
+```bash
+# نصب پکیج‌های موردنیاز
+pip install django djangorestframework python-decouple celery django-redis \
+            pymongo boto3 user-agents django-celery-beat
+
+# اجرای مایگریشن‌ها
+python manage.py migrate
+
+# اجرای Worker سلری
+celery -A core worker -l info
+
+# اجرای Beat (برای تسک‌های زمان‌بندی‌شده مانند بررسی انقضای قرارداد)
+celery -A core beat -l info
+```
+
+سپس `middleware.middleware.RequestLogMiddleware` باید در `MIDDLEWARE` تنظیمات Django (بعد از `CommonMiddleware` و قبل از `CsrfViewMiddleware`) اضافه شود — که در تنظیمات فعلی این کار انجام شده است.
+
+---
+
+## نمونه ساختار لاگ ذخیره‌شده
+
+```json
+{
+  "method": "POST",
+  "path": "/api/orders/",
+  "user": "ali_reza / 09121234567",
+  "user_id": "42",
+  "ip_address": "185.23.45.12",
+  "query_params": {},
+  "body": {"product_id": "10", "quantity": "2"},
+  "status_code": 201,
+  "response_time_ms": 132.45,
+  "error_message": null,
+  "user_agent": "Mozilla/5.0 (...)",
+  "device_info": {
+    "browser": "Chrome",
+    "browser_version": "125.0",
+    "os": "Windows",
+    "os_version": "10",
+    "device": "Other",
+    "is_mobile": false,
+    "is_pc": true,
+    "is_tablet": false
+  },
+  "created_at": 1751000000.123
 }
+```
 
-DATABASE_ROUTERS = ['core.db_router.LogsRouter']
+---
 
-Celery + Redis + MongoDB را راه‌اندازی کنید (در ادامه توضیح داده شده)
+## نکات مهم و پیشنهادات بهبود
 
-
-⚙ پیکربندی محیط (env)
-فایل نمونه: envs/.env.dev
-env# PostgreSQL (default db)
-PGDB_NAME=shadowlogger
-PGDB_USER=postgres
-PGDB_PASS=postgres
-PGDB_HOST=db
-PGDB_PORT=5432
-
-# Redis for Celery
-CELERY_REDIS=True
-REDIS_URL=redis://redis:6379/0
-
-# MongoDB
-MONGO_URI=mongodb://mongouser:mongopass@mongo:27017/sedo_logs?authSource=admin
-
-🐳 اجرای سریع با Docker (توصیه شده)
-Bashgit clone https://github.com/Hamidrezamoradi1992/ShadowLogger.git
-cd ShadowLogger
-docker-compose up --build
-سرویس‌های اجرا شده:
-
-Django (0.0.0.0:8000)
-PostgreSQL
-Redis
-MongoDB
-Celery Worker
-Celery Beat
-
-
-▶ تست سریع
-Bashcurl http://localhost:8000/middleware/test/
-سپس بررسی کنید:
-
-SQL Logs: http://localhost:8000/admin/middleware/requestlog/
-MongoDB:Bashdocker exec -it shadowlogger-mongo-1 mongosh -u mongouser -p mongopass --authenticationDatabase admin sedo_logs
-> db.request_logs.find().limit(5).pretty()
-
-
-🔒 امنیت و حساس‌سازی داده‌ها
-در middleware.py می‌توانید به راحتی فیلدهای حساس (مثل password، token، card_number) را ماسک کنید:
-PythonSENSITIVE_KEYS = ['password', 'token', 'credit_card', 'ssn']
-
-def mask_sensitive_data(data):
-    if isinstance(data, dict):
-        return {k: '***MASKED***' if k.lower() in SENSITIVE_KEYS else v for k, v in data.items()}
-    return data
-
-📊 مقایسه SQL vs NoSQL Logging
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-موردSQL (PostgreSQL/SQLite)NoSQL (MongoDB)تحلیل‌های ساختاریافتهعالی (BI، گزارش‌گیری)متوسطحجم بالا و آرشیومحدود توسط IOPSبسیار بالا و ارزانجستجوی Full-Textبا افزونه‌ها ممکن استNative و سریعبازیابی خطاهاهمگام → بدون از دست رفتن لاگآسنکرون → ممکن است تاخیر داشته باشد
-
-📜 لایسنس
-MIT License – آزاد برای استفاده تجاری و شخصی
-
-👤 نویسنده
-حمیدرضا مرادی
-GitHub: @Hamidrezamoradi1992
-LinkedIn: hamidreza-moradi
-
-اگر این پروژه براتون مفید بود، یک ⭐ ستاره فراموش نشه! 😄
+- تابع `save_request_log` هرچند مقصد ذخیره‌سازی را به‌صورت اولویت‌دار امتحان می‌کند، اما در صورت موفقیت در MongoDB به‌درستی از تابع خارج (`return`) می‌شود؛ بنابراین ذخیره‌سازی موازی در چند بستر هم‌زمان انجام نمی‌شود، مگر اینکه منطق آن تغییر کند.
+- مقدار `mode=777` در `os.makedirs` باید با احتیاط استفاده شود، چون مجوز دسترسی کامل به همه کاربران سیستم می‌دهد؛ برای محیط Production توصیه می‌شود این مقدار محدودتر شود (مثلاً `0o755`).
+- توابع `safe_json` و `serialize_for_celery` وظیفه‌ی تبدیل داده‌های غیرقابل‌سریالایز (مانند `ObjectId`, `datetime`, `bytes`) را قبل از ارسال به Celery/Mongo/JSON بر عهده دارند تا از خطاهای سریالایزیشن جلوگیری شود.
+- بدنه‌ی فایل‌های آپلودی هرگز به‌طور کامل در لاگ ذخیره نمی‌شود؛ فقط متادیتای فایل (نام، حجم، نوع) ثبت می‌شود تا از حجیم شدن لاگ‌ها و نشت اطلاعات حساس جلوگیری شود.
+- توصیه می‌شود اطلاعات حساس (مانند رمز عبور، توکن‌ها) پیش از ثبت لاگ، از بدنه‌ی درخواست فیلتر (mask) شوند؛ در حال حاضر چنین فیلتری در کد پیاده‌سازی نشده است.
